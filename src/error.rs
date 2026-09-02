@@ -17,7 +17,24 @@ pub fn cmd_error(program: &str, code: Option<i32>, stderr: &str) -> anyhow::Erro
 /// 校验外部工具存在。
 pub fn require_cmd(cmd: &str) -> Result<()> {
     if crate::runtime::which(cmd).is_none() {
-        anyhow::bail!("未找到 {cmd}，请先安装。见 README 安装依赖一节。");
+        anyhow::bail!("未找到 {cmd}，请先安装。{}", install_hint(cmd));
     }
     Ok(())
+}
+
+/// 按平台附一行安装命令（常见包管理器；ffprobe 随 ffmpeg 包提供）。
+fn install_hint(cmd: &str) -> String {
+    let pkg = if cmd == "ffprobe" { "ffmpeg" } else { cmd };
+    let media_tool = matches!(cmd, "ffmpeg" | "ffprobe" | "yt-dlp");
+    if cfg!(target_os = "macos") {
+        if media_tool {
+            "macOS: brew install ffmpeg yt-dlp".into()
+        } else {
+            format!("macOS: brew install {pkg}")
+        }
+    } else if cfg!(target_os = "windows") {
+        format!("Windows: winget install {pkg}")
+    } else {
+        format!("Debian/Ubuntu: sudo apt install {pkg}；Arch: sudo pacman -S {pkg}")
+    }
 }

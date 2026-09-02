@@ -14,10 +14,13 @@ Examples:
   course2md https://youtu.be/dQw4w9WgXcQ
   course2md ./lecture.mp4
   course2md models download
+  course2md doctor      # 体检环境（依赖/后端/配置/模型缓存）
   course2md config init   # 生成配置文件模板
   course2md llm setup     # 配置 LLM 字幕润色
   course2md summarize <输出目录|输出根>  # 为已有输出生成视频总结（支持批量）
   course2md remove                    # 清除 LLM/STT 的 API 配置（提交代码前执行）
+
+首次运行（无配置文件且处于交互终端）会进入向导，引导选择转写方式。
 "
 )]
 pub struct Cli {
@@ -73,7 +76,7 @@ pub struct RunOpts {
     #[arg(long, value_enum)]
     pub provider: Option<crate::config::AsrProvider>,
 
-    /// ASR model: qwen3 (default & recommended Qwen3-ASR 1.7B) | whisper (large-v3-turbo) | tiny | base
+    /// ASR model: qwen3 (default & recommended Qwen3-ASR 1.7B) | qwen3-0.6b (Apple ANE, low power) | whisper (large-v3-turbo) | tiny | base
     /// (backend constraints: gpu/cpu only support qwen3 family; whisper sizes like tiny/base only on coreml/npu/api)
     #[arg(long)]
     pub asr_model: Option<String>,

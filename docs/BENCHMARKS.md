@@ -20,7 +20,7 @@ Reproduce with `packaging/bench-mac.sh` (speed + power via `powermetrics`). 复�
 
 | Backend / 后端 | Wall / 总耗时 | ASR only / 纯识别 | CPU | GPU | ANE | Peak memory / 峰值内存 |
 |---|---:|---:|---:|---:|---:|---|
-| `coreml` + qwen3 0.6B **(default / 默认)** | 47 s | 46.4 s | 6.7 W | 0.2 W | 3.5 W | 1.41 GB (in-process / 进程内) |
+| `coreml` + qwen3-0.6B (CoreML/ANE) | 47 s | 46.4 s | 6.7 W | 0.2 W | 3.5 W | 1.41 GB (in-process / 进程内) |
 | `coreml` + whisper large-v3-turbo | 87 s | 85.3 s | 15.3 W | 0.3 W | 0.4 W | 1.51 GB (in-process / 进程内) |
 | `gpu` (llama.cpp Metal, Qwen3-ASR 1.7B Q8) | **13 s** | 11.2 s | 4.7 W | **16.0 W** | — | 26 MB + 3.3 GB child / 子进程 |
 | `cpu` (llama.cpp, same model) | 26 s | 25.6 s | **21.2 W** | 0.6 W | — | 26 MB + 4.8 GB child / 子进程 |
@@ -29,14 +29,17 @@ Reproduce with `packaging/bench-mac.sh` (speed + power via `powermetrics`). 复�
 † Network-bound, provider-dependent. Audio leaves the machine / 取决于网络与提供商；音频会上传。
 
 Derived totals over the run (power × time, for reference only) / 全程能量参考值（功率×时间）：
-coreml-qwen3 ≈ 493 J · gpu-llama ≈ 269 J · cpu-llama ≈ 567 J · coreml-whisper ≈ 1387 J（含 ~2 W 空闲基线）。
+coreml-qwen3-0.6b ≈ 493 J · gpu-llama ≈ 269 J · cpu-llama ≈ 567 J · coreml-whisper ≈ 1387 J（含 ~2 W 空闲基线）。
+
+> **Current default model / 当前默认模型**: the `coreml` measurements above were taken with the former 0.6B CoreML default. The current default `qwen3-1.7b` (Qwen3-ASR 1.7B MLX 8bit, GPU) is more accurate and faster per upstream benchmarks (WER 1.52% vs 3.02%, RTF 0.033 vs 0.098, RSS 2.7 GB vs 1.4 GB), but runs on GPU instead of the low-power ANE path.
+> 上表 `coreml` 数据为旧默认 0.6B 模型实测；当前默认 `qwen3-1.7b`（MLX 8bit，走 GPU）按上游 benchmark 更准更快（WER 1.52% vs 3.02%，RTF 0.033 vs 0.098，RSS 2.7GB vs 1.4GB），但放弃 ANE 低功耗路径。电池优先可用 `--asr-model qwen3-0.6b`。
 
 ### Takeaways / 结论
 
-- **Battery-friendliest / 最省电**: `coreml`+qwen3 — Neural Engine carries the load at ~3.5 W sustained; total SoC power stays low. 适合笔记本电池场景。
+- **Battery-friendliest / 最省电**: `coreml`+qwen3-0.6b — Neural Engine carries the load at ~3.5 W sustained; total SoC power stays low. 适合笔记本电池场景。
 - **Fastest / 最快**: `gpu` (llama.cpp + Metal) — ~4× faster end-to-end, at the cost of GPU bursts (16.0 W) and an external `llama-server` (~3.3 GB model in a child process).
 - **whisper-turbo on CoreML**: slower & hotter here (decoder largely on CPU for short VAD segments); best suited to long-form audio with its 30 s windowing. In our Chinese sample qwen3 transcribed noticeably better / 中文课程 qwen3 明显更好。
-- **First-run downloads / 首次下载**: coreml qwen3 ≈ 1–2 GB, whisper-turbo ≈ 1.5 GB → `~/Library/Caches/qwen3-speech/`; llama.cpp GGUF 2.4 GB → `~/.cache/course2md/models/`.
+- **First-run downloads / 首次下载**: coreml qwen3-1.7b ≈ 2.3 GB, qwen3-0.6b ≈ 1 GB, whisper-turbo ≈ 1.5 GB → `~/Library/Caches/qwen3-speech/`; llama.cpp GGUF 2.4 GB → `~/.cache/course2md/models/`.
 
 ---
 

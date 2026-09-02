@@ -321,7 +321,7 @@ impl PipelineConfig {
                 AsrProvider::Coreml => {
                     anyhow::ensure!(
                         lower.contains("qwen") || lower.contains("whisper"),
-                        "provider coreml 只支持 qwen3 / whisper（收到 {m:?}）"
+                        "provider coreml 只支持 qwen3-1.7b / qwen3-0.6b / whisper（收到 {m:?}）"
                     );
                 }
                 AsrProvider::Npu => {

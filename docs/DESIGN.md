@@ -21,7 +21,7 @@ URL ── yt-dlp ─┐
               │      Silero VAD (CoreML)      silencedetect 分段
               │              │                     │
               │              ▼                     ▼
-              │      Qwen3-ASR CoreML (ANE)   llama-server + Qwen3-ASR
+              │      Qwen3-ASR (MLX/CoreML)   llama-server + Qwen3-ASR
               │      (speech-swift 运行时)    GGUF (300s 就绪超时)
               │              │                     │
               │              └──────────┬──────────┘
@@ -49,7 +49,7 @@ URL ── yt-dlp ─┐
 时间线合并：每段语音按时间中点归属截图；跨截图边界时只在边界附近的句读或空格处拆分（保持图文对应），找不到自然断点则整段保留，避免按字符比例从词中间截断。细粒度原始事件先完整写入 `timeline.jsonl`；随后同一截图下短停顿（<3.5s）内的连续片段组织为自然段（上限 420 字），独立出现的无语义填充词被过滤。`course.md`/`course.html`/`structured.json` 使用这些段落；LLM 校对的单位是段落而非 VAD 碎片（视觉润色时另附该节截图），校对后以 `raw` 保留校对前文本。
 
 语音识别支持两种路径：
-1. **CoreML 原生路径**（macOS Apple Silicon 预编译包默认）：通过静态链接的 `speech-swift` 运行 Silero VAD CoreML（ANE）与 Qwen3-ASR 0.6B CoreML（ANE + GPU），零外部运行时依赖。若 CoreML 初始化或运行失败，会自动回落至 `llama-server` 并发出警告。
+1. **CoreML 原生路径**（macOS Apple Silicon 预编译包默认）：通过静态链接的 `speech-swift` 运行 Silero VAD CoreML（ANE）与 Qwen3-ASR（默认 1.7B MLX 8bit，走 GPU；可选 0.6B CoreML 走 ANE 省电，或 Whisper large-v3-turbo），零外部运行时依赖。若 CoreML 初始化或运行失败，会自动回落至 `llama-server` 并发出警告。
 2. **llama.cpp 路径**（Linux / Windows / 通用兜底）：由 ffmpeg `silencedetect` 分段，逐段提交给本地 `llama-server` 进程。模型为约 2.4GB 的 Qwen3-ASR GGUF，缺失时自动下载。
 
 若开启 LLM 润色功能（默认关闭），系统会将识别事件按 20 段一批发送至 OpenAI 兼容端点进行口语修正与同音字纠错，单批失败时自动保留原文且不阻断转换流程。
@@ -67,7 +67,7 @@ src/
   cli.rs       命令行参数与子命令定义 (clap)
   config.rs    运行期配置结构体、ROI 与缓存路径工具
   settings.rs  配置文件 (config.toml) 加载、保存与 defaults 优先级合并
-  apple.rs     macOS Apple Silicon 原生后端：Silero VAD + Qwen3-ASR (CoreML)
+  apple.rs     macOS Apple Silicon 原生后端：Silero VAD + Qwen3-ASR (MLX / CoreML)
   asr.rs       ASR 调度、silencedetect 分段、llama-server 进程管理与转写
   fetch.rs     yt-dlp 元数据抓取与视频下载
   media.rs     ffprobe 视频/音频探测与 ffmpeg 音频抽取

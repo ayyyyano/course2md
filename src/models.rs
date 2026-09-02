@@ -95,12 +95,25 @@ pub fn ensure_llama(root: &Path) -> Result<LlamaAsr> {
 /// 没有模型就下载；下载过程请保持进程运行。
 pub async fn ensure_llama_or_download(root: &Path) -> Result<LlamaAsr> {
     if !llama_ready(root) {
-        let msg = "第一次运行，正在下载识别模型（约 2.4GB），请不要退出。";
-        tracing::warn!("{msg}");
-        eprintln!("{msg}");
+        // eprintln 而非 tracing::warn：-q 下 warn 被静默，2.4GB 下载前必须可见
+        eprintln!(
+            "识别模型未就绪，正在下载（约 2.4GB）到 {}，请不要退出。",
+            root.display()
+        );
         download_models(root).await?;
     }
     Ok(llama_paths(root))
+}
+
+/// 下载失败的附加提示：未设镜像时提示 HF_ENDPOINT（直连 Hugging Face
+/// 不稳定是常见失败原因）；已设镜像则回显当前端点便于排查。
+fn mirror_hint() -> String {
+    match current_hf_endpoint() {
+        Some(ep) => format!("下载失败（当前 HF_ENDPOINT={ep}）"),
+        None => "下载失败：如直连 Hugging Face 不稳定，可设镜像环境变量 \
+                 HF_ENDPOINT=https://hf-mirror.com 后重试"
+            .into(),
+    }
 }
 
 /// 下载 llama.cpp Qwen3-ASR GGUF。
@@ -114,13 +127,15 @@ pub async fn download_models(root: &Path) -> Result<()> {
         &p.model,
         LLAMA_MODEL_FILE,
     )
-    .await?;
+    .await
+    .with_context(mirror_hint)?;
     download_file(
         &format!("{base}/{HF_REPO_PATH}/{LLAMA_MMPROJ_FILE}"),
         &p.mmproj,
         LLAMA_MMPROJ_FILE,
     )
-    .await?;
+    .await
+    .with_context(mirror_hint)?;
     tracing::info!(path = %root.display(), "models ready");
     Ok(())
 }

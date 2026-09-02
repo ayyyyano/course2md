@@ -95,10 +95,11 @@ private func progressLog(_ p: Double, _ msg: String) {
     fputs("  [course2md] model \(Int(p * 100))% - \(msg)\n", __stderrp)
 }
 
-// MARK: - ASR (CoreML)：qwen3 | whisper 两种模型
+// MARK: - ASR：qwen3（CoreML 0.6B/ANE）| qwen3-1.7b（MLX/GPU）| whisper
 
 enum AsrKind {
     case qwen(CoreMLASRModel)
+    case qwenMlx(Qwen3ASRModel)
     case whisper(WhisperASRModel)
 }
 
@@ -117,6 +118,15 @@ public func c2mAsrCreate(_ model: UnsafePointer<CChar>, _ errBuf: UnsafeMutableP
                 try await WhisperASRModel.fromPretrained(progressHandler: progressLog)
             }
             kind = .whisper(m)
+        } else if name == "qwen3-1.7b" {
+            // MLX/GPU 路径（1.7B 无 CoreML/ANE 导出）：WER 约为 0.6B 一半、
+            // 速度约 3 倍，代价是 ~2.7GB RSS 且放弃 ANE 低功耗。
+            let m = try runSync {
+                try await Qwen3ASRModel.fromPretrained(
+                    modelId: "aufklarer/Qwen3-ASR-1.7B-MLX-8bit",
+                    progressHandler: progressLog)
+            }
+            kind = .qwenMlx(m)
         } else {
             let m = try runSync {
                 try await CoreMLASRModel.fromPretrained(progressHandler: progressLog)
@@ -126,7 +136,7 @@ public func c2mAsrCreate(_ model: UnsafePointer<CChar>, _ errBuf: UnsafeMutableP
         }
         return Unmanaged.passRetained(AsrBox(kind)).toOpaque()
     } catch {
-        let msg = "CoreML ASR init failed (\(name)): \(error)"
+        let msg = "ASR init failed (\(name)): \(error)"
         msg.withCString { cStr in
             _ = strncpy(errBuf, cStr, errLen - 1)
         }
@@ -148,6 +158,8 @@ public func c2mAsrTranscribe(
         switch box.model {
         case .qwen(let m):
             text = try m.transcribe(audio: samples, sampleRate: 16000, language: nil, maxTokens: 448)
+        case .qwenMlx(let m):
+            text = m.transcribe(audio: samples, sampleRate: 16000, language: nil, maxTokens: 448)
         case .whisper(let m):
             text = try runSync {
                 try await m.transcribeAudio(samples, sampleRate: 16000, language: nil)

@@ -28,11 +28,14 @@ course2md https://youtu.be/dQw4w9WgXcQ
 course2md ./lecture.mp4
 ```
 
-> **First Run Note**:
-> - **macOS (Apple Silicon, `coreml`)**: On first interactive run, `course2md` asks which ASR model to download: **Qwen3-ASR 0.6B** (recommended — best for Chinese/English, smallest, most efficient) or **Whisper large-v3-turbo** (better for multilingual). Weights are cached under `~/Library/Caches/qwen3-speech/`.
-> - **Linux / Windows (`gpu` / `cpu`)**: Downloads the GGUF ASR model (~2.4 GB) to `~/.cache/course2md/models/`.
-> - **Cloud STT (`api`)**: No local model download needed; transcribes via an OpenAI-compatible endpoint (e.g. OpenRouter).
-> - **Slow / blocked network?** Set a HuggingFace mirror first: `export HF_ENDPOINT=https://hf-mirror.com` — or skip local models entirely with `course2md <URL> --provider api`.
+> **First Run Note**: The very first run (`course2md <URL or file>` with no config file yet and no `--provider` flag, in an interactive terminal) launches a setup wizard for speech recognition:
+> - **Local or cloud first**: **Local recognition** (recommended — offline, free, private; model download required) or **Cloud API** (no model download; needs an OpenAI-compatible endpoint API key, pay-as-you-go).
+> - **Local backends, matched to your machine**: the recommended option is listed first — `coreml` (Apple native) on macOS Apple Silicon, `gpu` when `llama-server` is installed, `npu` on Intel NPU machines, and `cpu` as the universal fallback.
+> - **`gpu` / `cpu` chosen**: confirms whether to download the ~2.4 GB model now, switch to the cloud API instead, or exit and download later via `course2md models download`.
+> - **`coreml` chosen (macOS)**: the model is downloaded on first transcription (~1–2.3 GB to `~/Library/Caches/qwen3-speech/`); an interactive prompt lets you pick **qwen3-1.7b** (default — Qwen3-ASR 1.7B MLX, most accurate) / **qwen3-0.6b** (CoreML on ANE, power-sipping, ~1 GB) / **whisper** (large-v3-turbo, multilingual).
+> - **Cloud API chosen**: prompts for base URL (defaults to OpenRouter), API key (may be left empty and supplied later via the `COURSE2MD_ASR_API_KEY` environment variable), and model name.
+> - The choice is saved to `~/.config/course2md/config.toml` — override it any time with `--provider` or by editing the file directly. Non-interactive environments (CI, pipes) skip the wizard and use the platform defaults.
+> - **Slow / blocked network?** Set a HuggingFace mirror first: `export HF_ENDPOINT=https://hf-mirror.com` (download errors print this hint too) — or skip local models entirely with `course2md <URL> --provider api`.
 > - Tip: pre-download the offline model any time with `course2md models download`.
 
 ---
@@ -43,6 +46,8 @@ course2md ./lecture.mp4
 - `ffmpeg` & `ffprobe` (Audio/video extraction and slide sampling)
 - `yt-dlp` (Online video parsing and downloading; only needed for online URLs)
 - `llama-server` (Provided by `llama.cpp`; only needed for local `gpu` / `cpu` backends, not required for macOS `coreml` or cloud `api` mode)
+
+Once installed, just run `course2md <URL or file>` — the first run interactively guides you through picking a speech recognition backend (see [First Run Note](#quick-start)).
 
 ---
 
@@ -155,13 +160,13 @@ cargo build --release
 
 | Backend (`--provider`) | Target & Default Policy | Architecture & Models | External Dependencies | Model Download & Cache Path | Highlights |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`coreml`** | **macOS Apple Silicon**<br>(Default for prebuilt arm64) | **Silero VAD v6.2.1 CoreML** (ANE)<br>+ **Qwen3-ASR 0.6B** (default) or **Whisper large-v3-turbo** ([speech-swift](https://github.com/soniqo/speech-swift)) | **Zero external dependencies**<br>(requires co-located `mlx.metallib`) | ~1–2 GB<br>`~/Library/Caches/qwen3-speech/`<br>*(supports `HF_ENDPOINT` mirror)* | Leverages Apple Neural Engine (ANE) and Metal; lowest power consumption (~375 J per 3 min); lightweight memory footprint; no daemon process |
+| **`coreml`** | **macOS Apple Silicon**<br>(Default for prebuilt arm64) | **Silero VAD v6.2.1 CoreML** (ANE)<br>+ **Qwen3-ASR 1.7B MLX 8bit** (default, GPU) / **Qwen3-ASR 0.6B** (CoreML on ANE) / **Whisper large-v3-turbo** ([speech-swift](https://github.com/soniqo/speech-swift)) | **Zero external dependencies**<br>(requires co-located `mlx.metallib`) | ~1–2.3 GB<br>`~/Library/Caches/qwen3-speech/`<br>*(supports `HF_ENDPOINT` mirror)* | Zero external deps and no daemon process; default 1.7B MLX model is the most accurate local option; `qwen3-0.6b` runs on the Neural Engine with the lowest power consumption (~375 J per 3 min) |
 | **`gpu`** | **Linux / Windows / Intel Mac**<br>(Default on non-Apple-Silicon) | **ffmpeg silencedetect**<br>+ **Qwen3-ASR 1.7B GGUF Q8** | Requires `llama-server`<br>(from `llama.cpp`) | ~2.4 GB<br>`~/.cache/course2md/models/` | High-precision 1.7B Q8 quantized model; fastest throughput via Metal / CUDA / Vulkan |
 | **`cpu`** | **Universal Fallback** | Same as `gpu`, with `-ngl 0` | Requires `llama-server` | ~2.4 GB<br>`~/.cache/course2md/models/` | Pure CPU execution; maximum hardware compatibility |
 | **`api`** | **Cloud STT (Any platform)** | **ffmpeg silencedetect**<br>+ OpenAI-compatible `/audio/transcriptions` (e.g. OpenRouter) | **Zero local model dependencies**<br>(requires network & API key) | **None** (Cloud-hosted) | Zero disk consumption, offloads computation to cloud. *Privacy note: audio chunks are uploaded.* |
 | **`npu`** | **Linux / Windows**<br>(Intel Core Ultra / AI Boost) | **ffmpeg silencedetect**<br>+ **OpenVINO Whisper Large-v3 Turbo** (default) / Base / Tiny | Requires `uv` or `python` with `openvino-genai` & NPU driver | Downloaded on demand via HuggingFace | **>6x faster than CPU**, low power, low memory (550MB vs 3.5GB CPU), high accuracy on Intel NPU |
 
-> **CoreML Model Selection**: When using `--provider coreml`, switch models via `--asr-model qwen3` (default) or `--asr-model whisper`. On first run in an interactive terminal, `course2md` will ask and remember your preference in `~/.config/course2md/asr_model`.
+> **CoreML Model Selection**: When using `--provider coreml`, switch models via `--asr-model qwen3-1.7b` (default, MLX on GPU), `--asr-model qwen3-0.6b` (CoreML on ANE, power-sipping), or `--asr-model whisper` (large-v3-turbo). On first use in an interactive terminal, `course2md` asks and remembers your choice in `defaults.asr_model` of `~/.config/course2md/config.toml` (a legacy `~/.config/course2md/asr_model` marker file is migrated automatically and removed).
 >
 > **Automatic Fallback**: On macOS, if the `coreml` backend fails during initialization or runtime, `course2md` automatically logs a warning and falls back to the `gpu` / `llama-server` pipeline to ensure task completion.
 
@@ -185,8 +190,8 @@ To ensure high-quality illustrated notes from lectures and technical talks, `cou
 
 | Model | Recommendation | Recommended Backend | Memory Footprint | Key Strengths | Limitations |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Qwen3-ASR 1.7B** | **★★★★★<br>(Default & Recommended)** | • macOS: `--provider gpu` (Metal accelerated in 13s)<br>• Linux: `--provider gpu` (CUDA) or `--provider npu`<br>• Universal: `--provider cpu` or `--provider api` | ~1.7–2.4 GB | Gold standard for Chinese & mixed-language technical lectures; flawless technical vocabulary; full punctuation; no truncated clauses | Larger download than 0.6B |
-| **Qwen3-ASR 0.6B** | **★★★★☆<br>(Lightweight)** | • macOS: `--provider coreml` (Native Apple Neural Engine)<br>• NPU: `--provider npu --asr-model 0.6b` | ~600 MB–1 GB | Compact, lowest power draw on laptops on battery; zero external dependencies | Slightly lower comprehension on rare technical jargon compared to 1.7B |
+| **Qwen3-ASR 1.7B** | **★★★★★<br>(Default & Recommended)** | • macOS: `--provider coreml` (default `qwen3-1.7b`, MLX on GPU) or `--provider gpu` (Metal accelerated in 13s)<br>• Linux: `--provider gpu` (CUDA) or `--provider npu`<br>• Universal: `--provider cpu` or `--provider api` | ~1.7–2.7 GB | Gold standard for Chinese & mixed-language technical lectures; flawless technical vocabulary; full punctuation; no truncated clauses | Larger download than 0.6B; MLX path uses GPU instead of the low-power ANE |
+| **Qwen3-ASR 0.6B** | **★★★★☆<br>(Lightweight)** | • macOS: `--provider coreml --asr-model qwen3-0.6b` (Native Apple Neural Engine)<br>• NPU: `--provider npu --asr-model 0.6b` | ~600 MB–1.4 GB | Compact, lowest power draw on laptops on battery; zero external dependencies | Slightly lower comprehension on rare technical jargon compared to 1.7B |
 | **Whisper Large-v3 Turbo** | **★★★☆☆<br>(Multilingual)** | • NPU: `--provider npu --asr-model whisper`<br>• macOS: `--provider coreml --asr-model whisper` | ~800 MB–1.5 GB | Strong for pure English or non-Chinese multilingual lectures; 12x real-time on Intel NPU | Sparse Chinese punctuation; occasional dropped clauses at segment boundaries; higher phonetic confusion on tech terms |
 | **Whisper Tiny / Base** | **★☆☆☆☆<br>(Fast Pipeline Test Only)** | • NPU: `--provider npu --asr-model tiny` | <200 MB | Ultra-fast (~39x real-time, 3 min in 4s), minimal RAM | High error rate and phonetic hallucinations; not recommended for production notes |
 
@@ -238,8 +243,8 @@ threads = 4
 # Inference backend: coreml (macOS Apple Silicon) | gpu | cpu | api
 # provider = "coreml"
 
-# CoreML model variant: qwen3 (default) | whisper (large-v3-turbo)
-# asr_model = "qwen3"
+# CoreML model variant: qwen3-1.7b (default, MLX on GPU) | qwen3-0.6b (CoreML on ANE, low power) | whisper (large-v3-turbo)
+# asr_model = "qwen3-1.7b"
 
 # Maximum speech segment duration in seconds before splitting
 max_speech = 20.0
@@ -417,7 +422,7 @@ Model dir: /Users/username/.cache/course2md/models
 | `-o, --out <DIR>` | Output root directory | `out` |
 | `--transcript-source <auto/subtitle/asr>` | Transcript source: `auto` = platform subtitles first (manual > auto-caption), fall back to local ASR; `subtitle` = fail if none; `asr` = skip subtitles | `auto` |
 | `--provider <coreml/gpu/cpu/api/npu>` | ASR backend: `coreml` (macOS arm64), `gpu` (non-Mac), `cpu`, or `api` (cloud STT) | Platform default |
-| `--asr-model <qwen3/whisper>` | CoreML ASR model variant (`qwen3` 0.6B or `whisper` large-v3-turbo) | `qwen3` |
+| `--asr-model <qwen3-1.7b/qwen3-0.6b/whisper>` | CoreML ASR model variant: `qwen3-1.7b` (default, MLX on GPU), `qwen3-0.6b` (CoreML on ANE, low power), or `whisper` (large-v3-turbo) | `qwen3-1.7b` |
 | `--asr-api-base-url <URL>` | Cloud STT base URL (OpenAI-compatible) | `https://openrouter.ai/api/v1` |
 | `--asr-api-key <KEY>` | Cloud STT API Key (or set `COURSE2MD_ASR_API_KEY` env) | Config / Env |
 | `--asr-api-model <MODEL>` | Cloud STT model slug (e.g. `qwen/qwen3-asr-flash-2026-02-10`) | `qwen/qwen3-asr-flash-2026-02-10` |
@@ -437,7 +442,7 @@ Model dir: /Users/username/.cache/course2md/models
 | `--no-llm-hint` | Suppress post-run LLM suggestion hint | Disabled |
 | `--resume` | Resume unfinished ASR chunks from the output dir | Disabled |
 | `--no-resume` | Discard existing checkpoints and redo everything | Disabled |
-| `-v, --verbose` | Increase logging verbosity (use `-vv` for debug) | `info` |
+| `-v, --verbose` | Increase logging verbosity (use `-vv` for debug; default logs omit timestamps, `-vv` restores the full RFC3339 format) | `info` |
 | `-q, --quiet` | Quiet mode (errors only) | Disabled |
 
 Display full help:
@@ -454,12 +459,14 @@ Measured on Apple Silicon (arm64) running a **3-minute** 1080p recorded lecture 
 
 | Backend (`--provider`) | Wall Time | Avg Power (CPU / GPU / ANE) | Peak Memory | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **`coreml` + qwen3** *(macOS default)* | 47 s | 6.7 W / 0.2 W / **3.5 W** | 1.41 GB in-proc | **Lowest power** — Neural Engine does the heavy lifting; best on battery; zero external dependencies |
+| **`coreml` + qwen3-0.6b** | 47 s | 6.7 W / 0.2 W / **3.5 W** | 1.41 GB in-proc | **Lowest power** — Neural Engine does the heavy lifting; best on battery; zero external dependencies |
 | **`coreml` + whisper-turbo** | 87 s | 15.3 W / 0.3 W / 0.4 W | 1.51 GB in-proc | Whisper large-v3-turbo on CoreML; decoder mostly on CPU for short segments |
 | **`gpu` (llama.cpp Metal)** | **13 s** | 4.7 W / **16.0 W** / — | 26 MB + 3.3 GB child | **Fastest**; GPU bursts; needs `llama-server` (Qwen3-ASR 1.7B Q8) |
 | **`cpu` (llama.cpp)** | 26 s | **21.2 W** / 0.6 W / — | 26 MB + 4.8 GB child | Universal fallback; high CPU power |
 | **`api` (cloud STT)** | ~10 s | < 1 W | negligible | Audio uploaded to provider; speed depends on network |
 | **`npu` (Intel Core Ultra)** | **16 s** | NPU hardware acceleration | 18 MB + 557 MB child | **>6x faster than CPU** on Intel Core Ultra laptops; Whisper Large-v3 Turbo |
+
+> **Note on the `coreml` default model**: the measurements above were taken with the former 0.6B CoreML default. The current default **`qwen3-1.7b`** (Qwen3-ASR 1.7B MLX 8bit, running on GPU) is both more accurate and faster per upstream benchmarks (WER 1.52% vs 3.02%, RTF 0.033 vs 0.098), at the cost of roughly 2× peak memory (RSS ~2.7 GB vs ~1.4 GB) and giving up the ANE low-power path. Pick `--asr-model qwen3-0.6b` when battery life matters most.
 
 👉 See the comprehensive [macOS Benchmark Report](docs/BENCHMARKS.md) for full methodology, energy breakdowns, and reproduction scripts.
 
@@ -514,7 +521,7 @@ Common fixes:
 
 | Symptom | Fix |
 | :--- | :--- |
-| Download fails on restricted networks | `export HF_ENDPOINT=https://hf-mirror.com` (honored by both GGUF and CoreML downloads) |
+| Download fails on restricted networks | `export HF_ENDPOINT=https://hf-mirror.com` (honored by both GGUF and CoreML downloads; download errors print this hint too) |
 | Transcripts look mixed/inconsistent after switching models | Pre-1.0 checkpoints are discarded automatically; rerun with `--no-resume` to force a clean pass |
 | `--no-download` deleted my video | Fixed in 1.0 — files not downloaded by the current run are never removed |
 | English course transcribed as Chinese on NPU | Fixed in 1.0 — language is auto-detected; force nothing |

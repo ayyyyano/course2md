@@ -28,11 +28,14 @@ course2md https://youtu.be/dQw4w9WgXcQ
 course2md ./lecture.mp4
 ```
 
-> **首次运行说明**：
-> - **macOS (Apple Silicon, `coreml`)**：首次交互式运行时，会提示选择识别模型：**Qwen3-ASR 0.6B**（推荐——中英文效果最好、体积最小、功耗最低）或 **Whisper large-v3-turbo**（多语言更合适）。模型保存在 `~/Library/Caches/qwen3-speech/`。
-> - **Linux / Windows (`gpu` / `cpu`)**：默认下载 GGUF 识别模型（约 2.4GB，保存在 `~/.cache/course2md/models/`）。
-> - **云端 STT (`api`)**：无需下载任何本地模型，直接通过 OpenAI 兼容端点（如 OpenRouter）在线转写。
-> - **网络受限？** 先设 HuggingFace 镜像：`export HF_ENDPOINT=https://hf-mirror.com`；或直接 `course2md <URL> --provider api` 免本地模型试用。
+> **首次运行说明**：首次运行（配置文件尚不存在、未传 `--provider`、且处于交互式终端）会进入配置向导，引导设置语音转写方式：
+> - **先选本地还是云端**：**本地识别**（推荐——离线、免费、隐私；首次需下载模型）或**云端 API**（免下载模型；需 OpenAI 兼容端点 API key，按量计费）。
+> - **本地后端按本机能力列出**：推荐项置顶——macOS Apple Silicon 上为 `coreml`（Apple 原生），装有 `llama-server` 时可选 `gpu`，Intel NPU 机器可选 `npu`，`cpu` 通用兜底。
+> - **选 `gpu` / `cpu`**：会确认是否现在下载约 2.4GB 模型，也可改为云端 API，或退出后稍后运行 `course2md models download` 手动下载。
+> - **选 `coreml`（macOS）**：模型在首次识别时才下载（约 1~2.3GB，保存到 `~/Library/Caches/qwen3-speech/`），届时可交互选择 **qwen3-1.7b**（默认——Qwen3-ASR 1.7B MLX，中文/中英混合最准）/ **qwen3-0.6b**（CoreML 走 ANE，省电低功耗，约 1GB）/ **whisper**（large-v3-turbo，多语种）。
+> - **选云端 API**：依次引导填写 base URL（默认 OpenRouter）、API Key（可留空，稍后用 `COURSE2MD_ASR_API_KEY` 环境变量提供）与模型名。
+> - 选择会写入 `~/.config/course2md/config.toml`——以后可用 `--provider` 临时切换，或直接编辑配置文件。非交互环境（CI、管道）不触发向导，走平台默认。
+> - **网络受限？** 先设 HuggingFace 镜像：`export HF_ENDPOINT=https://hf-mirror.com`（下载失败时错误信息也会提示）；或直接 `course2md <URL> --provider api` 免本地模型试用。
 > - 提示：随时可用 `course2md models download` 预先下载离线识别模型。
 
 ---
@@ -43,6 +46,8 @@ course2md ./lecture.mp4
 - `ffmpeg` & `ffprobe`（音视频抽取与画面采样）
 - `yt-dlp`（在线视频解析与下载；仅处理在线链接时需要）
 - `llama-server`（由 `llama.cpp` 提供；仅在本地 `gpu` / `cpu` 识别后端下需要，macOS `coreml` 与云端 `api` 模式无需安装）
+
+装完直接运行 `course2md <URL或文件>` 即可——首次运行会引导配置语音识别后端（见上文[首次运行说明](#快速上手)）。
 
 ---
 
@@ -155,13 +160,13 @@ cargo build --release
 
 | 后端 (`--provider`) | 适用平台与默认策略 | 核心架构与模型 | 外部依赖 | 首次下载与缓存路径 | 特点 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`coreml`** | **macOS Apple Silicon**<br>(预编译包默认) | **Silero VAD v6.2.1 CoreML** (ANE)<br>+ **Qwen3-ASR 0.6B**（默认）或 **Whisper large-v3-turbo** ([speech-swift](https://github.com/soniqo/speech-swift)) | **零外部依赖**<br>(仅需同目录 `mlx.metallib`) | 约 1~2GB<br>`~/Library/Caches/qwen3-speech/`<br>*(支持 `HF_ENDPOINT` 镜像)* | 充分调用 Apple 神经网络引擎 (ANE) 与 GPU，功耗极低（3 分钟约 375 J），内存开销小，无子进程 |
+| **`coreml`** | **macOS Apple Silicon**<br>(预编译包默认) | **Silero VAD v6.2.1 CoreML** (ANE)<br>+ **Qwen3-ASR 1.7B MLX 8bit**（默认，走 GPU）/ **Qwen3-ASR 0.6B**（CoreML 走 ANE）/ **Whisper large-v3-turbo** ([speech-swift](https://github.com/soniqo/speech-swift)) | **零外部依赖**<br>(仅需同目录 `mlx.metallib`) | 约 1~2.3GB<br>`~/Library/Caches/qwen3-speech/`<br>*(支持 `HF_ENDPOINT` 镜像)* | 零外部依赖、无子进程；默认 1.7B MLX 模型最准；`qwen3-0.6b` 走神经网络引擎 (ANE)，功耗极低（3 分钟约 375 J） |
 | **`gpu`** | **Linux / Windows / Intel Mac**<br>(非 Apple Silicon 默认) | **ffmpeg silencedetect**<br>+ **Qwen3-ASR 1.7B GGUF Q8** | 需要 `llama-server`<br>(由 `llama.cpp` 提供) | 约 2.4GB<br>`~/.cache/course2md/models/` | 1.7B 高精度量化模型，支持 Metal / CUDA / Vulkan 等显卡加速，吞吐极高 |
 | **`cpu`** | **通用兜底** | 同 `gpu`，禁用 GPU 卸载 (`-ngl 0`) | 需要 `llama-server` | 约 2.4GB<br>`~/.cache/course2md/models/` | 纯 CPU 计算，兼容性最高 |
 | **`api`** | **云端 STT（跨平台通用）** | **ffmpeg silencedetect**<br>+ OpenAI 兼容 `/audio/transcriptions` 端点（如 OpenRouter） | **零本地模型依赖**<br>(需网络与 API Key) | **无**（云端托管） | 零磁盘模型占用，低配置设备友好。*隐私提示：音频切片将上传云端。* |
 | **`npu`** | **Linux / Windows**<br>(Intel Core Ultra / AI Boost) | **ffmpeg silencedetect**<br>+ **OpenVINO Whisper Large-v3 Turbo** (默认) / Base / Tiny | 需要 `uv` 或 `python` 带 `openvino-genai` 与 NPU 驱动 | 按需自 HuggingFace 下载 | **比纯 CPU 快 6 倍以上**，极低功耗，显存/内存节省 84%（550MB vs 3.5GB） |
 
-> **CoreML 模型切换**：使用 `--provider coreml` 时，可通过 `--asr-model qwen3`（默认）或 `--asr-model whisper` 切换。首次在交互式终端运行且未配置时，程序会提示选择并记忆至 `~/.config/course2md/asr_model`。
+> **CoreML 模型切换**：使用 `--provider coreml` 时，可通过 `--asr-model qwen3-1.7b`（默认，MLX 走 GPU）、`--asr-model qwen3-0.6b`（CoreML 走 ANE，省电）或 `--asr-model whisper`（large-v3-turbo）切换。首次在交互式终端使用且未配置时，程序会提示选择并记忆至 `~/.config/course2md/config.toml` 的 `defaults.asr_model`（旧的 `~/.config/course2md/asr_model` marker 文件会自动迁移后删除）。
 >
 > **自动回落机制**：在 macOS 上如果 `coreml` 后端初始化或运行失败，系统会自动给出警告并无缝回退至 `gpu` / `llama-server` 模式，确保转换任务顺利完成。
 
@@ -185,8 +190,8 @@ cargo build --release
 
 | 模型 | 推荐级别 | 推荐运行方式 | 显存/内存占用 | 核心优势 | 劣势与注意事项 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Qwen3-ASR 1.7B** | **★★★★★<br>(强烈推荐)** | • macOS: `--provider gpu` (Metal 加速，仅需 13 秒)<br>• Linux: `--provider gpu` (CUDA) 或 `--provider npu`<br>• 通用: `--provider cpu` 或 `--provider api` | ~1.7GB~2.4GB | 中文及技术课程整体表现更好；标点较完整，专有名词更稳 | 模型体积略大于 0.6B |
-| **Qwen3-ASR 0.6B** | **★★★★☆<br>(极致高能效)** | • macOS: `--provider coreml` (Apple Neural Engine 原生)<br>• NPU: `--provider npu --asr-model 0.6b` | ~600MB~1GB | 体积小、在轻薄本和电池模式下能效极高；纯本地零外部依赖 | 生僻复杂技术词理解略逊于 1.7B 满血版 |
+| **Qwen3-ASR 1.7B** | **★★★★★<br>(强烈推荐)** | • macOS: `--provider coreml`（默认 `qwen3-1.7b`，MLX 走 GPU）或 `--provider gpu` (Metal 加速，仅需 13 秒)<br>• Linux: `--provider gpu` (CUDA) 或 `--provider npu`<br>• 通用: `--provider cpu` 或 `--provider api` | ~1.7GB~2.7GB | 中文及技术课程整体表现更好；标点较完整，专有名词更稳 | 模型体积略大于 0.6B；MLX 路径走 GPU，放弃 ANE 低功耗 |
+| **Qwen3-ASR 0.6B** | **★★★★☆<br>(极致高能效)** | • macOS: `--provider coreml --asr-model qwen3-0.6b` (Apple Neural Engine 原生)<br>• NPU: `--provider npu --asr-model 0.6b` | ~600MB~1.4GB | 体积小、在轻薄本和电池模式下能效极高；纯本地零外部依赖 | 生僻复杂技术词理解略逊于 1.7B 满血版 |
 | **Whisper Large-v3 Turbo** | **★★★☆☆<br>(纯英文/小语种)** | • NPU: `--provider npu --asr-model whisper`<br>• macOS: `--provider coreml --asr-model whisper` | ~800MB~1.5GB | 纯英文或非中文多语种识别能力优秀；OpenVINO NPU 上达 12x 实时加速 | 中文标点欠缺；语速快时偶发句尾吞词；技术词音近误判率高 |
 | **Whisper Tiny / Base** | **★☆☆☆☆<br>(仅供测试)** | • NPU: `--provider npu --asr-model tiny` | <200MB | 极速（39x 实时，3分钟仅需4秒），极低显存 | 严重音近幻觉，不建议用于正式讲义 |
 
@@ -238,8 +243,8 @@ threads = 4
 # 识别后端：coreml（macOS Apple Silicon 推荐）| gpu | cpu | api
 # provider = "coreml"
 
-# CoreML 识别模型选择：qwen3（默认）| whisper（large-v3-turbo）
-# asr_model = "qwen3"
+# CoreML 识别模型选择：qwen3-1.7b（默认，MLX 走 GPU）| qwen3-0.6b（CoreML 走 ANE，省电）| whisper（large-v3-turbo）
+# asr_model = "qwen3-1.7b"
 
 # 单段语音最长切分秒数
 max_speech = 20.0
@@ -418,7 +423,7 @@ out/<平台>/<标题>/<编号>/
 | `-o, --out <目录>` | 指定输出根目录 | `out` |
 | `--transcript-source <auto/subtitle/asr>` | 转写来源：`auto` = 平台字幕优先（人工>自动），无字幕再走本地 ASR；`subtitle` = 强制字幕（无则报错）；`asr` = 跳过字幕直接识别 | `auto` |
 | `--provider <coreml/gpu/cpu/api/npu>` | 识别后端：`coreml`（macOS 默认）、`gpu`（非 Mac 默认）、`cpu`、`api`（云端 STT） | 视平台而定 |
-| `--asr-model <qwen3/whisper>` | CoreML 识别模型变体（`qwen3` 0.6B 或 `whisper` large-v3-turbo） | `qwen3` |
+| `--asr-model <qwen3-1.7b/qwen3-0.6b/whisper>` | CoreML 识别模型变体：`qwen3-1.7b`（默认，MLX 走 GPU）、`qwen3-0.6b`（CoreML 走 ANE，省电）或 `whisper`（large-v3-turbo） | `qwen3-1.7b` |
 | `--asr-api-base-url <URL>` | 云端 STT base URL（OpenAI 兼容） | `https://openrouter.ai/api/v1` |
 | `--asr-api-key <KEY>` | 云端 STT API Key（亦可设置 `COURSE2MD_ASR_API_KEY` 环境变量） | 配置文件 / 环境变量 |
 | `--asr-api-model <模型名>` | 云端 STT 模型名称（如 `qwen/qwen3-asr-flash-2026-02-10`） | `qwen/qwen3-asr-flash-2026-02-10` |
@@ -438,7 +443,7 @@ out/<平台>/<标题>/<编号>/
 | `--no-llm-hint` | 本次运行关闭任务结束时的 LLM 开启提示 | 关闭 |
 | `--resume` | 从输出目录续跑未完成的 ASR chunk | 关闭 |
 | `--no-resume` | 丢弃既有进度，全部重算 | 关闭 |
-| `-v, --verbose` | 输出更详细的执行日志（可叠加 `-vv` 进入 debug） | 默认 info |
+| `-v, --verbose` | 输出更详细的执行日志（可叠加 `-vv` 进入 debug；默认日志不带时间戳，`-vv` 恢复完整 RFC3339 格式） | 默认 info |
 | `-q, --quiet` | 静默模式，只显示错误 | 关闭 |
 
 查看完整参数与子命令列表：
@@ -455,12 +460,14 @@ course2md --help
 
 | 识别后端 (`--provider`) | 总耗时 | 平均功率 (CPU / GPU / ANE) | 峰值内存 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| **`coreml` + qwen3**（macOS 默认） | 47 s | 6.7 W / 0.2 W / **3.5 W** | 1.41 GB 进程内 | **功耗最低**：神经网络引擎扛主力，电池场景首选；零外部依赖 |
+| **`coreml` + qwen3-0.6b** | 47 s | 6.7 W / 0.2 W / **3.5 W** | 1.41 GB 进程内 | **功耗最低**：神经网络引擎扛主力，电池场景首选；零外部依赖 |
 | **`coreml` + whisper-turbo** | 87 s | 15.3 W / 0.3 W / 0.4 W | 1.51 GB 进程内 | Whisper large-v3-turbo CoreML；短分段下解码器主要在 CPU |
 | **`gpu`**（llama.cpp Metal） | **13 s** | 4.7 W / **16.0 W** / — | 26 MB + 3.3 GB 子进程 | **最快**：GPU 峰值高；需 `llama-server`（Qwen3-ASR 1.7B Q8） |
 | **`cpu`**（llama.cpp） | 26 s | **21.2 W** / 0.6 W / — | 26 MB + 4.8 GB 子进程 | 通用兜底；CPU 功耗高 |
 | **`api`**（云端 STT） | ~10 s | < 1 W | 可忽略 | 音频会上传；速度取决于网络 |
 | **`npu`**（Intel Core Ultra） | **16 s** | NPU 硬件加速 | 18 MB + 557 MB 子进程 | **比纯 CPU 快 6 倍**（3 分钟音频 15 秒识别），低功耗，Whisper Large-v3 Turbo |
+
+> **关于 `coreml` 默认模型的说明**：上表数据是在旧默认 0.6B CoreML 模型下实测的。当前默认 **`qwen3-1.7b`**（Qwen3-ASR 1.7B MLX 8bit，走 GPU）按上游 benchmark 更准也更快（WER 1.52% vs 3.02%，RTF 0.033 vs 0.098），代价是峰值内存约 2 倍（RSS 约 2.7GB vs 1.4GB），且不再走 ANE 低功耗路径。电池优先场景可显式选择 `--asr-model qwen3-0.6b`。
 
 👉 详见完整的 [macOS 性能与功耗基准报告](docs/BENCHMARKS.md)（含测试方法论、详细能耗拆解与复现脚本）。
 
@@ -512,7 +519,7 @@ course2md doctor
 
 | 症状 | 处理 |
 | :--- | :--- |
-| 网络受限下载失败 | `export HF_ENDPOINT=https://hf-mirror.com`（GGUF 与 CoreML 下载均生效） |
+| 网络受限下载失败 | `export HF_ENDPOINT=https://hf-mirror.com`（GGUF 与 CoreML 下载均生效；下载失败的报错也会提示该镜像） |
 | 换模型后转写混杂 | 1.0 起旧 checkpoint 自动作废；也可 `--no-resume` 强制重算 |
 | `--no-download` 删了我的视频 | 1.0 已修复——非本次运行下载的文件永不删除 |
 | NPU 上英文课被转成中文 | 1.0 已修复——语言改为自动检测，不再强制中文 |

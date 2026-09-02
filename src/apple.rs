@@ -103,7 +103,9 @@ fn ensure_metallib() -> Result<()> {
     )
 }
 
-/// 解析 coreml 后端用的模型：显式指定 > 标记文件 > （交互式终端则询问并记忆）> qwen3。
+/// 解析 coreml 后端用的模型：显式参数（调用方已合并 CLI 与 config.toml
+/// defaults.asr_model）> 旧 marker 文件（一次性迁移到 config.toml 并删除）
+/// > （交互式终端则询问并写 config.toml）> qwen3-1.7b。
 pub fn resolve_model(explicit: Option<&str>) -> Result<String> {
     if let Some(m) = explicit {
         return normalize(m);
@@ -112,50 +114,82 @@ pub fn resolve_model(explicit: Option<&str>) -> Result<String> {
     if let Ok(s) = std::fs::read_to_string(&marker)
         && let Ok(m) = normalize(s.trim())
     {
+        migrate_marker(&marker, &m);
         return Ok(m);
     }
     let chosen = prompt_model_choice();
-    let _ = std::fs::write(&marker, &chosen);
+    persist_model_choice(&chosen);
     Ok(chosen)
 }
 
-/// 模型名归一化。未知名字报错而不是静默归为 qwen3——与 npu 侧
-/// 「不静默更换模型」原则对齐（静默换模型会让转写来源不可追溯）。
-fn normalize(s: &str) -> Result<String> {
-    let s = s.trim().to_ascii_lowercase();
-    if s.is_empty() || s.contains("qwen") {
-        Ok("qwen3".into())
-    } else if s.contains("whisper") {
-        Ok("whisper".into())
-    } else {
-        anyhow::bail!("未知的 CoreML 模型名 `{s}`（可选：qwen3 | whisper）")
+/// 把交互选择的模型写入 config.toml defaults.asr_model（不再写 marker 双轨）。
+/// 失败只告警不阻断：本次已拿到选择，下次仍会再询问。
+fn persist_model_choice(model: &str) {
+    if let Err(e) = (|| -> Result<()> {
+        let mut cfg = crate::settings::load()?;
+        cfg.defaults.asr_model = Some(model.to_string());
+        crate::settings::save(&cfg)?;
+        Ok(())
+    })() {
+        tracing::warn!("保存模型选择到 config.toml 失败（下次仍会询问）：{e:#}");
     }
 }
 
-/// 首次使用：让用户选择下载哪个模型（非交互环境默认 qwen3）。
+/// 旧 marker 文件（~/.config/course2md/asr_model）→ config.toml defaults.asr_model，
+/// 写盘成功后才删除 marker（失败保留，下次再迁移）。
+fn migrate_marker(marker: &Path, model: &str) {
+    match (|| -> Result<()> {
+        let mut cfg = crate::settings::load()?;
+        cfg.defaults.asr_model = Some(model.to_string());
+        crate::settings::save(&cfg)?;
+        Ok(())
+    })() {
+        Ok(()) => {
+            let _ = std::fs::remove_file(marker);
+            tracing::info!("已将模型选择从 asr_model marker 迁移到 config.toml");
+        }
+        Err(e) => tracing::warn!("迁移 asr_model marker 到 config.toml 失败（保留 marker）：{e:#}"),
+    }
+}
+
+/// 模型名归一化。未知名字报错而不是静默归类——与 npu 侧
+/// 「不静默更换模型」原则对齐（静默换模型会让转写来源不可追溯）。
+/// 变体：qwen3-1.7b（默认，MLX/GPU，WER 最低）| qwen3-0.6b（CoreML/ANE，省电）| whisper。
+fn normalize(s: &str) -> Result<String> {
+    let s = s.trim().to_ascii_lowercase();
+    if s.contains("0.6") {
+        Ok("qwen3-0.6b".into())
+    } else if s.contains("whisper") {
+        Ok("whisper".into())
+    } else if s.is_empty() || s.contains("qwen") || s.contains("1.7") {
+        Ok("qwen3-1.7b".into())
+    } else {
+        anyhow::bail!("未知的 Apple 原生模型名 `{s}`（可选：qwen3-1.7b | qwen3-0.6b | whisper）")
+    }
+}
+
+/// 首次使用：让用户选择下载哪个模型（非交互环境默认 qwen3-1.7b）。
 /// dialoguer 提供标准行编辑与方向键选择（裸 read_line 不处理转义序列，issue #3）。
 fn prompt_model_choice() -> String {
-    if !atty_or_tty() {
-        tracing::info!("非交互环境，默认使用 Qwen3-ASR 模型（--asr-model whisper 可切换）");
-        return "qwen3".into();
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        tracing::info!("非交互环境，默认使用 Qwen3-ASR 1.7B 模型（--asr-model qwen3-0.6b/whisper 可切换）");
+        return "qwen3-1.7b".into();
     }
     let choice = dialoguer::Select::new()
         .with_prompt("选择识别模型 / Select ASR Model")
         .items([
-            "qwen3 — Qwen3-ASR 0.6B（默认；中文/中英混合整体更好，下载较小）",
+            "qwen3-1.7b — Qwen3-ASR 1.7B MLX（推荐；中文/中英混合最准，下载约 2.3GB）",
+            "qwen3-0.6b — Qwen3-ASR 0.6B CoreML（ANE 省电低功耗，下载约 1GB）",
             "whisper — Whisper Large-v3 Turbo（多语种；纯英文/非中文可选）",
         ])
         .default(0)
         .interact_opt();
     match choice {
-        Ok(Some(1)) => "whisper".into(),
-        _ => "qwen3".into(),
+        Ok(Some(1)) => "qwen3-0.6b".into(),
+        Ok(Some(2)) => "whisper".into(),
+        _ => "qwen3-1.7b".into(),
     }
-}
-
-fn atty_or_tty() -> bool {
-    // stderr 接终端才算交互（stdin 可能被重定向）
-    unsafe { libc::isatty(2) == 1 }
 }
 
 impl CoremlAsr {
@@ -231,7 +265,7 @@ pub fn run_coreml(
     }
 
     ensure_metallib()?;
-    tracing::info!(model, "loading CoreML ASR（首次使用会自动下载模型）");
+    tracing::info!(model, "loading Apple native ASR（首次使用会自动下载模型）");
     let asr = CoremlAsr::load(model).context("CoreML 模型加载失败")?;
     tracing::info!(
         secs = format_args!("{:.1}", t0.elapsed().as_secs_f64()),

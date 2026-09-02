@@ -18,3 +18,4 @@ pub mod settings;
 pub mod subtitle;
 pub mod summarize;
 pub mod timeline;
+pub mod wizard;

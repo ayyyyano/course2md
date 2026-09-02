@@ -1,6 +1,6 @@
 use clap::Parser;
 use course2md::cli::{Cli, Command, ConfigCmd, LlmCmd, ModelsCmd, RunOpts};
-use course2md::{config, doctor, llm, models, pipeline, settings};
+use course2md::{config, doctor, llm, models, pipeline, settings, wizard};
 use tracing_subscriber::EnvFilter;
 
 fn init_logging(verbose: u8, quiet: bool) {
@@ -12,11 +12,20 @@ fn init_logging(verbose: u8, quiet: bool) {
         "info"
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| default.into());
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(verbose >= 2)
-        .compact()
-        .init();
+    if verbose >= 2 {
+        // 调试档：完整格式（时间 + target）
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(true)
+            .init();
+    } else {
+        // 默认档：个人 CLI 时间戳是纯噪音，compact 单行
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .without_time()
+            .compact()
+            .init();
+    }
 }
 
 /// 配置文件 + CLI 覆盖 -> 生效 LLM 设置。
@@ -290,6 +299,8 @@ fn main() -> anyhow::Result<()> {
             };
             init_logging(cli.opts.verbose, cli.opts.quiet);
             let file = settings::load()?;
+            // 首次使用向导：无配置文件 + 交互终端时引导配置并写盘（非交互原样返回）
+            let file = wizard::maybe_run(&cli.opts, &file)?;
             let cfg = run_opts_to_cfg(source, &cli.opts, &file)?;
             // 全量预检在 pipeline::run 开头做（下载/抽帧/模型加载之前，毫秒级失败）
             tracing::info!(out = %cfg.out_dir.display(), provider = %cfg.provider, "start");

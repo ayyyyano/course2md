@@ -325,19 +325,23 @@ fn print_summary(
         .sum();
 
     eprintln!();
-    eprintln!("──────── course2md 完成 ────────");
-    eprintln!("标题: {}", meta.title);
+    eprintln!("──────── ✓ course2md 完成 ────────");
+    eprintln!("标题:     {}", meta.title);
     eprintln!("输出目录: {}", out.display());
     eprintln!();
     eprintln!("文稿:");
     for f in &cfg.formats {
         let p = out.join(f.output_name());
         if p.is_file() {
-            eprintln!("  {}", p.display());
+            eprintln!("  ✓ {}", p.display());
         }
     }
     eprintln!("截图: {}/frames/  ({} 张)", out.display(), sections.len());
-    eprintln!("音频: {}", cfg.audio_path().display());
+    // 字幕优先的视频不产生 audio.wav，不存在的路径打出来只会误导
+    let audio = cfg.audio_path();
+    if audio.is_file() {
+        eprintln!("音频: {}", audio.display());
+    }
     if is_local {
         eprintln!("视频: {}  (本地输入，未改动)", media.display());
     } else if media_deleted {
@@ -361,7 +365,13 @@ fn print_summary(
         (Some(mb), None) => eprintln!("峰值内存（本进程 RSS）: {mb:.0} MB"),
         _ => eprintln!("峰值内存: 不可用"),
     }
-    eprintln!("模型目录: {}", cfg.model_dir.display());
+    // 模型目录只对 llama.cpp 后端（gpu/cpu）有意义；coreml 走系统缓存、api 无本地模型
+    if matches!(
+        cfg.provider,
+        config::AsrProvider::Gpu | config::AsrProvider::Cpu
+    ) {
+        eprintln!("模型目录: {}", cfg.model_dir.display());
+    }
     eprintln!("──────────────────────────────");
     if !cfg.llm.enabled && !cfg.llm.disable_hint {
         crate::llm::write_hint_note(&crate::settings::config_path());

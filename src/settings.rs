@@ -19,7 +19,7 @@ pub struct Defaults {
     pub roi: Option<String>,
     pub threads: Option<i32>,
     pub provider: Option<crate::config::AsrProvider>,
-    /// coreml 后端的模型：qwen3 | whisper（首次使用可交互选择）
+    /// coreml 后端的模型：qwen3-1.7b（默认）| qwen3-0.6b | whisper（首次使用可交互选择）
     pub asr_model: Option<String>,
     /// 转写来源：auto（字幕优先）| subtitle | asr
     pub transcript_source: Option<crate::config::TranscriptSource>,
@@ -184,7 +184,8 @@ pub const TEMPLATE: &str = r#"# course2md 配置文件
 #provider = "gpu"
 
 # 识别模型推荐 (各个后端通用)：
-# - qwen3 (默认推荐): Qwen3-ASR 1.7B，中文及中英混合技术课程整体更好，标点较完整
+# 识别模型推荐（各后端通用；Apple 原生 coreml 后端：qwen3-1.7b 默认 / qwen3-0.6b 省电 / whisper）：
+# - qwen3 / qwen3-1.7b (默认推荐): Qwen3-ASR 1.7B，中文及中英混合技术课程整体更好，标点较完整
 # - whisper: Whisper Large-v3 Turbo，适合纯英文或多语种视频
 #asr_model = "qwen3"
 # 转写来源：auto = 平台字幕优先（人工>自动），无字幕再走本地 ASR；

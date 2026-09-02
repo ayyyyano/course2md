@@ -166,6 +166,8 @@ pub fn run() -> Result<()> {
             }
             Err(e) => check(&mut out, false, "config", &format!("  解析失败：{e:#}")),
         }
+    } else if crate::wizard::is_first_run(true) {
+        out.push("- config        未配置（首次运行将进入向导）".into());
     } else {
         out.push("- config        未创建（可选，course2md config init 生成）".into());
     }
