@@ -3,6 +3,27 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 修复
+
+- **LLM 输出契约统一**（#11）：润色结果改为顶层对象 `{"segments":[...]}`，
+  与 `response_format: json_object` 一致（此前提示词要求顶层数组，契约
+  互相矛盾）；解析器仍兼容模型直接返回顶层数组的情况
+- **视觉降级收敛**（#11）：仅当端点返回参数类 4xx（疑似不支持图片输入）
+  才降级纯文本；401/403/404/429/5xx、网络与解析失败不再误触发降级
+- **请求放大收敛**（#11）：4xx 确定性错误与限流失败后不再递归拆分批次；
+  `response_format` 兼容性降级剔除 403/404；响应缺失 message.content
+  直接报错而非静默空串；LLM 配置缺失在进入润色前一次性拦截跳过
+- `llm setup` 连接测试在 `vision=true` 时附带测试图片，修复
+  「文本通了但图片请求不可用」的假阳性（#11）
+
+### 改进
+
+- `config init` 模板与 `config show` / `llm status` 补齐 `vision`、
+  `concurrency` 等非敏感字段展示（#11）
+- 中英文 README 补充 LLM 文本与截图上传的隐私说明（#11）
+
 ## [1.4.0] — 2026-09-03
 
 ### 新增

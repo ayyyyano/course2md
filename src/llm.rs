@@ -5,7 +5,8 @@
 //! 关闭时每次任务结束打印开启提示（可用配置项或 `--no-llm-hint` 关闭）。
 //!
 //! 视觉润色（`vision = true`）：按 Section 分批，每个请求附该节幻灯片截图，
-//! 供模型校正技术词汇拼写（issue #5）；端点不支持图片时该批自动降级纯文本。
+//! 供模型校正技术词汇拼写（issue #5）；仅当端点返回参数类 4xx（疑似不支持
+//! 图片输入）时该批才降级纯文本，其余错误原样报告（issue #11）。
 
 use crate::timeline::{Section, TranscriptEvent};
 use anyhow::{Context, Result, bail};
@@ -19,7 +20,7 @@ pub const DEFAULT_PROMPT: &str = "你是视频逐字稿校对器。输入的每�
 并修复不自然的断句和标点，使文字自然、书面化。不得概括、扩写、翻译、增删实质内容或改变原意；\
 保持原语言。若某条内容仅由语气词、口头禅或无实义片段构成（如单独的\"啊\"、\"对吧\"），\
 该条的 text 返回空字符串 \"\"（系统会删除该条）；有实质内容的条目不得删除。\
-输出与输入逐条对应的 JSON 对象数组，每项形如 {\"id\":序号,\"text\":\"校对后的文本\"}，不要输出任何其他内容。";
+输出与输入逐条对应的 JSON 对象 {\"segments\":[{\"id\":序号,\"text\":\"校对后的文本\"}]}，不要输出任何其他内容。";
 
 /// 每次请求合并的语音段数。
 const BATCH: usize = 20;
@@ -121,11 +122,18 @@ pub(crate) fn chat_body(
 
 /// 对已合并的 Section 做润色（在 merge 之后调用）。
 /// - 失败批次保留原文（润色失败不阻断转换）
-/// - vision=true 且截图存在时，请求附该节幻灯片；带图失败自动降级纯文本重试一次
+/// - vision=true 且截图存在时，请求附该节幻灯片；仅参数类 4xx（疑似不支持
+///   图片）才降级纯文本重试一次，401/429/5xx 等不误判为图片问题（issue #11）
 /// - 模型对纯语气词条目返回空 text → 该条被删除（issue #5）
 /// - Section 间真并发（worker 池抢占式取活，无波次队头阻塞）；
-///   批次失败拆半递归重试 + 请求级指数退避，推理模型下更稳更快
+///   疑似输出长度问题的失败（网络/5xx/解析/id 不匹配）拆半递归重试 +
+///   请求级指数退避；4xx 确定性错误与限流不拆分，避免请求量放大
 pub fn polish_sections(sections: &mut [Section], frames_root: &Path, s: &LlmSettings) {
+    // 配置缺失一次性拦截：否则每个分块都会各发满重试后失败，白白放大请求量
+    if let Err(e) = validate(s) {
+        tracing::warn!("{e:#}，跳过 LLM 润色");
+        return;
+    }
     let total: usize = sections
         .iter()
         .map(|sec| sec.speech.chunks(BATCH).len())
@@ -184,7 +192,10 @@ fn polish_section(
                 Err(e) => {
                     warn_once(
                         warned,
-                        &format!("读取幻灯片截图 {} 失败（{e:#}），该节按纯文本润色", p.display()),
+                        &format!(
+                            "读取幻灯片截图 {} 失败（{e:#}），该节按纯文本润色",
+                            p.display()
+                        ),
                     );
                     None
                 }
@@ -203,7 +214,38 @@ fn polish_section(
     sec.speech.retain(|e| !e.text.trim().is_empty());
 }
 
-/// 递归润色一个分块；失败（含 id 集不匹配）时拆半重试，保证尽力而为。
+/// 一次润色调用的失败：携带 HTTP 状态码（网络/解析错误为 None），
+/// 供上层区分「服务端明确拒绝参数」与「鉴权/限流/解析失败」（issue #11）。
+struct PolishError {
+    status: Option<u16>,
+    err: anyhow::Error,
+}
+
+impl PolishError {
+    /// 仅 400/422 参数校验错误才疑似「不支持图片输入」，允许一次纯文本降级；
+    /// 401/403/404（鉴权/权限/模型不存在）、429（限流）、5xx、网络与解析
+    /// 失败都不能证明是图片问题，原样报错，不误降级掩盖真实错误。
+    fn allows_vision_fallback(&self) -> bool {
+        matches!(self.status, Some(400) | Some(422))
+    }
+
+    /// 只有疑似输出长度或单批复杂度导致的失败（网络错误、5xx、解析失败）
+    /// 才值得拆半重试；4xx 确定性错误与限流拆半只会放大请求量。
+    fn allows_split(&self) -> bool {
+        match self.status {
+            None => true,
+            Some(c) => c >= 500,
+        }
+    }
+}
+
+impl std::fmt::Display for PolishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.err)
+    }
+}
+
+/// 递归润色一个分块；失败（含 id 集不匹配）时按错误类型决定是否拆半重试。
 /// `image_b64` 为该节幻灯片截图的 base64（由 polish_section 统一读取一次）。
 fn polish_chunk(
     s: &LlmSettings,
@@ -222,14 +264,14 @@ fn polish_chunk(
         .collect();
     let r = match (chat(s, &items, image_b64), image_b64) {
         (Ok(v), _) => Ok(v),
-        (Err(e), Some(_)) => {
+        (Err(e), Some(_)) if e.allows_vision_fallback() => {
             warn_once(
                 vision_warned,
-                &format!("带图润色失败（{e:#}），该批降级为纯文本重试"),
+                &format!("端点拒绝带图请求（{e}），疑似不支持图片输入，该批降级为纯文本重试"),
             );
             chat(s, &items, None)
         }
-        (Err(e), None) => Err(e),
+        (Err(e), _) => Err(e),
     };
     match r {
         Ok(polished) => {
@@ -243,10 +285,10 @@ fn polish_chunk(
             }
         }
         Err(e) => {
-            if chunk.len() > 1 {
+            if chunk.len() > 1 && e.allows_split() {
                 split_and_retry(s, chunk, image_b64, warned, vision_warned);
             } else {
-                warn_once(warned, &format!("LLM 润色失败（{e:#}），保留原文"));
+                warn_once(warned, &format!("LLM 润色失败（{e}），保留原文"));
             }
         }
     }
@@ -299,16 +341,24 @@ fn warn_once(warned: &std::sync::atomic::AtomicBool, msg: &str) {
 
 /// 发一批（id, 文本）给 LLM，返回润色后的 (id, 文本) 列表。
 /// `image_b64` 提供时在用户消息中附上该幻灯片截图（OpenAI 兼容 image_url 协议）。
+/// 错误携带 HTTP 状态码（PolishError），供上层决定降级/拆分策略。
 fn chat(
     s: &LlmSettings,
     items: &[(usize, &str)],
     image_b64: Option<&str>,
-) -> Result<Vec<(usize, String)>> {
-    validate(s)?;
-    let body = build_chat_body(s, items, image_b64)?;
-    let content = send_chat(s, &body)?;
-    parse_id_text_pairs(&content)
-        .with_context(|| format!("LLM 响应不是 id/text JSON 数组: {:.200}", content))
+) -> std::result::Result<Vec<(usize, String)>, PolishError> {
+    let no_status = |err: anyhow::Error| PolishError { status: None, err };
+    let body = build_chat_body(s, items, image_b64).map_err(no_status)?;
+    let content = send_chat(s, &body).map_err(|f| PolishError {
+        status: f.status,
+        err: f.err,
+    })?;
+    parse_segments(&content).ok_or_else(|| {
+        no_status(anyhow::anyhow!(
+            "LLM 响应不是 segments JSON: {:.200}",
+            content
+        ))
+    })
 }
 
 /// 构造 /chat/completions 请求体（独立出来便于单测覆盖视觉路径）。
@@ -326,7 +376,10 @@ fn build_chat_body(
     } else {
         ""
     };
-    let system = format!("{} 输出为 JSON 数组，每项形如 {{\"id\":序号,\"text\":润色后的文本}}，id 必须与输入一一对应；纯语气词条目的 text 为空字符串。{vision_note}", effective_prompt(s));
+    let system = format!(
+        "{} 输出为 JSON 对象 {{\"segments\":[{{\"id\":序号,\"text\":润色后的文本}}]}}，id 必须与输入一一对应；纯语气词条目的 text 为空字符串。{vision_note}",
+        effective_prompt(s)
+    );
     let mut content = vec![serde_json::json!({
         "type": "text",
         "text": serde_json::to_string(&payload)?,
@@ -343,6 +396,41 @@ fn build_chat_body(
         serde_json::Value::Array(content),
         CHAT_MAX_TOKENS,
     ))
+}
+
+/// 从模型输出提取润色结果。约定契约为顶层对象 {"segments":[{"id":n,"text":"..."}]}
+/// （与 response_format=json_object 一致，issue #11）；兼容模型无视指令仍返回
+/// 顶层数组的情况。两者都容忍代码围栏、前后杂文与尾逗号。
+pub fn parse_segments(content: &str) -> Option<Vec<(usize, String)>> {
+    // 1) 契约路径：{"segments":[...]}
+    if let Some(obj) = extract_json_object(content)
+        && let Some(arr) = obj.get("segments").and_then(|v| v.as_array())
+        && let Some(items) = parse_items(arr)
+    {
+        return Some(items);
+    }
+    // 2) 兼容路径：顶层数组（含个别坏项的宽容扫描）
+    parse_id_text_pairs(content)
+}
+
+/// 截取首个 { 到末个 } 解析为 JSON 对象；容忍尾逗号。
+fn extract_json_object(content: &str) -> Option<serde_json::Value> {
+    let start = content.find('{')?;
+    let end = content.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let slice = &content[start..=end];
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(slice) {
+        return Some(v);
+    }
+    let cleaned = clean_trailing_commas(slice);
+    if cleaned != slice
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned)
+    {
+        return Some(v);
+    }
+    None
 }
 
 /// 从模型输出提取 [{"id":n,"text":"..."}]（容忍代码围栏、前后杂文、尾逗号与个别坏项）。
@@ -457,19 +545,23 @@ fn lenient_scan(s: &str) -> Option<Vec<(usize, String)>> {
 ///
 /// 兼容性降级：部分 OpenAI 兼容端点不支持 `response_format: json_object`
 ///（直接 400）。仅当错误是参数类 4xx 时去掉该字段重试一次。
-pub(crate) fn send_chat(s: &LlmSettings, body: &serde_json::Value) -> Result<String> {
+pub(crate) fn send_chat(
+    s: &LlmSettings,
+    body: &serde_json::Value,
+) -> std::result::Result<String, ChatFailure> {
     let resp = match request_chat(s, body) {
         Ok(r) => r,
         Err(first) => {
-            // 只有 400（或其他非 401/429 的 4xx）才有理由怀疑是 response_format
-            // 不兼容；401（鉴权）/429（限流）/超时/5xx 与该字段无关，原样报错。
+            // 只有 400（或其他非鉴权/限流的 4xx）才有理由怀疑是 response_format
+            // 不兼容；401/403/404（鉴权/权限/路径）与 429（限流）、超时、5xx
+            // 与该字段无关，原样报错（issue #11：404 也从可降级集中剔除）。
             let degradable = match first.status {
                 Some(400) => true,
-                Some(c) => (400..500).contains(&c) && c != 401 && c != 429,
+                Some(c) => (400..500).contains(&c) && !matches!(c, 401 | 403 | 404 | 429),
                 None => false,
             };
             if !(degradable && body.get("response_format").is_some()) {
-                return Err(first.err);
+                return Err(first);
             }
             let mut relaxed = body.clone();
             if let Some(obj) = relaxed.as_object_mut() {
@@ -482,23 +574,33 @@ pub(crate) fn send_chat(s: &LlmSettings, body: &serde_json::Value) -> Result<Str
                     tracing::debug!("端点不支持 response_format，降级重试成功");
                     r
                 }
-                Err(_) => return Err(first.err),
+                Err(_) => return Err(first),
             }
         }
     };
-    let v: serde_json::Value = resp.into_json().context("LLM 响应解析失败")?;
-    Ok(v["choices"][0]["message"]["content"]
+    let no_status = |err: anyhow::Error| ChatFailure {
+        status: None,
+        retryable: false,
+        err,
+    };
+    let v: serde_json::Value = resp
+        .into_json()
+        .map_err(|e| no_status(anyhow::Error::new(e).context("LLM 响应解析失败")))?;
+    // 代理/网关可能返回 200 但 body 是错误结构；静默取空串会劣化成
+    // 「解析失败 → 拆半重试」的请求风暴，这里直接报出响应头部便于定位
+    v["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("")
-        .to_string())
+        .filter(|c| !c.is_empty())
+        .map(|c| c.to_string())
+        .ok_or_else(|| no_status(anyhow::anyhow!("LLM 响应缺少 message.content: {:.200}", v)))
 }
 
 /// LLM 请求失败：携带 HTTP 状态码（网络错误为 None）与是否可重试，
-/// 供 send_chat 判断 response_format 降级是否有意义。
-struct ChatFailure {
-    status: Option<u16>,
+/// 供 send_chat/polish 判断 response_format 降级、视觉降级与批次拆分是否有意义。
+pub(crate) struct ChatFailure {
+    pub(crate) status: Option<u16>,
     retryable: bool,
-    err: anyhow::Error,
+    pub(crate) err: anyhow::Error,
 }
 
 /// 网络层错误 / 429 / 5xx 可重试；其余 4xx（鉴权、参数）重试无意义。
@@ -592,8 +694,8 @@ fn request_chat(
 }
 
 /// 用户自定义校对指令；空白视为未设置，回落到内置提示词。
-/// 注意：输出格式约束（JSON 数组 / id 对应）由系统在构造请求体时自动追加，
-/// 自定义 prompt 无法覆盖（见 build_chat_body）。
+/// 注意：输出格式约束（{"segments":[...]} 契约 / id 对应）由系统在构造
+/// 请求体时自动追加，自定义 prompt 无法覆盖（见 build_chat_body）。
 fn effective_prompt(s: &LlmSettings) -> &str {
     s.prompt
         .as_deref()
@@ -601,22 +703,43 @@ fn effective_prompt(s: &LlmSettings) -> &str {
         .unwrap_or(DEFAULT_PROMPT)
 }
 
-/// 用最小请求验证端点与凭据可用。
+/// 1×1 PNG 测试图：vision=true 时连接测试附带，
+/// 避免「文本请求通了但实际图片请求不可用」的假阳性（issue #11）。
+const TEST_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+/// 用最小请求验证端点与凭据可用；vision=true 时附带测试图片，
+/// 同时验证图片输入路径（失败会明确报出，不会显示为已验证可用）。
 pub fn test_connection(s: &LlmSettings) -> Result<()> {
     validate(s)?;
+    let user: serde_json::Value = if s.vision {
+        serde_json::json!([
+            {"type": "text", "text": "只回复两个字符：ok"},
+            {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{TEST_PNG_B64}")}},
+        ])
+    } else {
+        serde_json::Value::String("只回复两个字符：ok".into())
+    };
     let body = serde_json::json!({
         "model": s.model,
         "max_tokens": 8,
-        "messages": [{"role": "user", "content": "只回复两个字符：ok"}],
+        "messages": [{"role": "user", "content": user}],
     });
+    let fail_hint = if s.vision {
+        "连接失败（vision 已开启：请确认该端点与模型支持图片输入）"
+    } else {
+        "连接失败"
+    };
     let resp = ureq::post(&endpoint(&s.base_url))
         .timeout(Duration::from_secs(60))
         .set("Authorization", &format!("Bearer {}", s.api_key))
         .send_json(body)
-        .context("连接失败")?;
+        .context(fail_hint)?;
     let v: serde_json::Value = resp.into_json().context("响应解析失败")?;
     let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
     println!("端点返回：{}", text.trim());
+    if s.vision {
+        println!("（已附带图片输入测试）");
+    }
     Ok(())
 }
 
@@ -716,13 +839,26 @@ pub fn print_status(cfg: &crate::settings::ConfigFile) {
     let key_disp = if s.api_key.is_empty() {
         "-".to_string()
     } else {
-        format!("{}...（已隐藏）", s.api_key.chars().take(6).collect::<String>())
+        format!(
+            "{}...（已隐藏）",
+            s.api_key.chars().take(6).collect::<String>()
+        )
     };
     println!("  api_key ：{key_disp}");
     println!(
         "  model   ：{}",
         if s.model.is_empty() { "-" } else { &s.model }
     );
+    println!(
+        "  视觉润色：{}",
+        if s.vision {
+            "开启（润色请求附幻灯片截图）"
+        } else {
+            "关闭"
+        }
+    );
+    println!("  自动总结：{}", if s.summarize { "开启" } else { "关闭" });
+    println!("  并发数  ：{}", s.concurrency);
     println!(
         "  结束提示：{}",
         if s.disable_hint {
@@ -890,6 +1026,49 @@ mod tests {
         );
         let sys = vision["messages"][0]["content"].as_str().unwrap();
         assert!(sys.contains("课件截图"), "带图时系统提示说明截图用途");
+        assert!(
+            sys.contains("\"segments\""),
+            "系统提示与 response_format=json_object 同为 segments 对象契约"
+        );
+    }
+
+    #[test]
+    fn parse_segments_object_contract() {
+        // 契约路径：顶层对象 {"segments":[...]}
+        let got =
+            parse_segments("{\"segments\":[{\"id\":0,\"text\":\"a\"},{\"id\":1,\"text\":\"b\"}]}")
+                .unwrap();
+        assert_eq!(got, vec![(0, "a".into()), (1, "b".into())]);
+        // 容忍围栏 + 尾逗号
+        let got =
+            parse_segments("```json\n{\"segments\":[{\"id\":0,\"text\":\"a\"},]}\n```").unwrap();
+        assert_eq!(got, vec![(0, "a".into())]);
+        // 兼容路径：模型无视指令仍返回顶层数组
+        let got = parse_segments("[{\"id\":0,\"text\":\"a\"}]").unwrap();
+        assert_eq!(got, vec![(0, "a".into())]);
+        assert!(parse_segments("{\"segments\":[]}").is_none());
+        assert!(parse_segments("没有 JSON").is_none());
+    }
+
+    #[test]
+    fn polish_error_fallback_and_split_policy() {
+        let mk = |status: Option<u16>| PolishError {
+            status,
+            err: anyhow::anyhow!("x"),
+        };
+        // 仅参数类 4xx 疑似「不支持图片」才允许纯文本降级
+        assert!(mk(Some(400)).allows_vision_fallback());
+        assert!(mk(Some(422)).allows_vision_fallback());
+        for c in [401, 403, 404, 429, 500, 503] {
+            assert!(!mk(Some(c)).allows_vision_fallback(), "{c} 不得降级");
+        }
+        assert!(!mk(None).allows_vision_fallback(), "解析/网络失败不得降级");
+        // 拆半只用于疑似输出长度问题（网络/5xx/解析）；4xx 与限流不放大请求量
+        assert!(mk(None).allows_split());
+        assert!(mk(Some(500)).allows_split());
+        for c in [400, 401, 403, 404, 422, 429] {
+            assert!(!mk(Some(c)).allows_split(), "{c} 不得拆半放大请求量");
+        }
     }
 
     #[test]

@@ -287,6 +287,12 @@ prompt = ""
 
 # 是否永久关闭任务结束时的 LLM 开启提示（默认 false）
 disable_hint = false
+
+# 视觉润色：润色请求附对应幻灯片截图，辅助纠正术语拼写（需模型支持图片输入，默认 false）
+#vision = false
+
+# 润色并发数（Section 间相互独立；自建网关/代理可调高）
+#concurrency = 8
 ```
 
 ---
@@ -332,6 +338,8 @@ course2md https://... --provider api --asr-api-mode chat \
   - *示例*：`我我干了什么呢？我在，我这是我的Neo Vim` → `我干了什么呢？我在，这是我的Neo Vim`
 - **兼容接口**：支持任意 OpenAI 兼容的 `/chat/completions` 端点（如 DeepSeek、GLM、OpenAI、Ollama、vLLM 等）。
 - **容错保证**：按 20 段语音合并批次并发起请求（`temperature=0`）。若某批次请求失败或响应解析异常，将自动回退保留 ASR 原始文本并给出警告，**绝不阻断整体转换流程**。
+
+> **隐私提示**：开启 LLM 润色会将转写文本上传至所配置的 LLM 服务；开启视觉润色（`vision = true`）还会随请求上传对应的幻灯片截图。文本与截图的数据保留政策由该服务商决定。这与 `--provider api` 的语音上传是相互独立的数据路径——「ASR 在本地运行」不代表 LLM 的文本和截图也留在本地。
 
 ### 快捷管理命令
 

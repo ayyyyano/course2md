@@ -157,7 +157,9 @@ fn parse_summary(content: &str) -> Option<Summary> {
 
 fn chat_once(s: &LlmSettings, sys: &str, user: &str) -> Result<String> {
     let body = llm::chat_body(&s.model, sys, user, llm::CHAT_MAX_TOKENS);
-    llm::send_chat(s, &body).context("LLM 总结请求失败")
+    llm::send_chat(s, &body)
+        .map_err(|f| f.err)
+        .context("LLM 总结请求失败")
 }
 
 /// 单次总结；解析失败带修复指令重试一次。

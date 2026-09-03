@@ -221,6 +221,10 @@ enabled = false
 #prompt = ""
 # 关闭任务结束时的 LLM 开启提示
 #disable_hint = false
+# 视觉润色：润色请求附对应幻灯片截图，辅助纠正术语拼写（需模型支持图片输入）
+#vision = false
+# 润色并发数（Section 间相互独立；自建网关/代理可调高）
+#concurrency = 8
 # 转换完成后自动生成视频总结（TL;DR/要点/大纲）并写入 md/html 开头（需 enabled）
 #summarize = false
 "#;
@@ -326,5 +330,7 @@ pub fn print_effective(cfg: &ConfigFile) {
             &cfg.llm.model
         }
     );
+    println!("  vision         : {}", cfg.llm.vision);
+    println!("  concurrency    : {}", cfg.llm.concurrency);
     println!("  summarize      : {}", cfg.llm.summarize);
 }

@@ -287,6 +287,13 @@ prompt = ""
 
 # Permanently suppress the post-run LLM suggestion hint (default: false)
 disable_hint = false
+
+# Vision polishing: attach the slide screenshot to each request to correct
+# terminology spelling (requires a vision-capable model; default: false)
+#vision = false
+
+# Polishing concurrency (sections are independent; raise for self-hosted gateways)
+#concurrency = 8
 ```
 
 ---
@@ -331,6 +338,8 @@ course2md https://... --provider api --asr-api-mode chat \
 - **Polishing Scope**: Corrects verbal tics and filler words (e.g., "um", "uh", "you know"), stuttering/repetitions, homophone typos, and technical terminology spelling. **Preserves original meaning, does not summarize, add, or translate content**.
 - **Compatible Endpoints**: Any OpenAI-compatible `/chat/completions` API (e.g., DeepSeek, GLM, OpenAI, Ollama, vLLM).
 - **Fault Tolerance**: Batches requests in 20-segment chunks (`temperature=0`). If a batch fails or returns invalid JSON, it automatically falls back to raw ASR text and logs a warning without halting the conversion.
+
+> **Privacy Note**: Enabling LLM polishing uploads the transcript text to the configured LLM endpoint; with vision polishing (`vision = true`), the corresponding slide screenshots are uploaded as well. Data retention for uploaded text and screenshots is governed by that service provider. This is an independent data path from `--provider api` audio uploads — local ASR does not imply LLM text and screenshots stay local.
 
 ### Management Commands
 
